@@ -1,0 +1,165 @@
+This is a simple Win32 GDI project. This will demonstrate the following 
+
+- screen capture
+- load/save some image formats .bmp, .jpg, .png, .ico, .cur
+- display those images
+- copy to clipboard
+- edit those images
+- zoom
+- clip
+- alpha blend
+- transperant bitmap
+- masking
+- apply path/region from a file
+- pallete animation
+- thumbnails of images in a folder
+- extract/insert resources into exe and dll
+- will export COM interface for other applications to use
+- will have a communication port open for other apps to send and request messages
+
+--------------------------------------------------------------------------------------------------------
+
+iWidthBytes = 2 * ((cx * cBitsPixel + 15) / 16) ;
+RowLength = 4 * ((bmch.bcWidth * bmch.bcBitCount + 31) / 32) ;
+
+- total number of bits in a row + word/dword length - 1 --> this makes sure that it crosses just the next boundary
+- that number divided by number of bits in word/dword gives the count of complete word/dword possible within that range removing the extra remainder
+- that number of word/dword multiplied by the number of bytes in word/dword gives the width of a row in bytes
+
+
+or, as a C programmer might tend to write it, 
+iWidthBytes = (cx * cBitsPixel + 15) & ~15) >> 3 ;
+RowLength = ((bmch.bcWidth * bmch.bcBitCount + 31) & ~31) >> 3 ;
+
+- total number of bits in a row + word/dword length - 1 --> this makes sure that it crosses just the next boundary
+- as we add F/1F we are putting a 1 on the 5th or the 9th position onwards as we cross over the just next word/dword boundary -> unit is bits
+- &`F/1F this basically makes the 4/5 bits on the LHS 0 that is removing the remainder -> units is bits
+- >>3 this is eqauivalent to divide by 8 -> unit in bytes
+
+thus the number of bytes aligned upto the just next word/dword boundary
+#define WIDTHBYTES(bits) ((DWORD)(((bits)+31) & (~31)) / 8)
+
+
+------------------------------------------------------------------------------------------------------------
+create DDB functions
+CreateBitmap(), CreateBitmapIndirect(), CreateCompatibleBitmap(), CreateDiscardableBitmap()
+
+create DIB functions
+
+
+
+	HDC hDCScreen, hDCCompatible, hDCClient;
+	HBITMAP hbmScreen, hbmOld, hbmClient;
+	int cx, cy;
+	CRect rec;
+	BITMAPINFO bminfo;
+	BYTE *pByte;
+	RGBTRIPLE trgb;
+	BITMAP bm;
+	DWORD dwErr = 0;
+
+	//getting the screen DC
+	hDCScreen = ::GetDC(NULL);
+	//creating a compatible DC to the screen DC
+	hDCCompatible = ::CreateCompatibleDC(hDCScreen);
+	//creating a compatible bitmap to the sreen DC
+	cx = ::GetDeviceCaps(hDCScreen, HORZRES);
+	cy = ::GetDeviceCaps(hDCScreen, VERTRES);
+	hbmScreen = ::CreateCompatibleBitmap(hDCScreen, cx, cy);
+	//selecting the compatible bitmap into the compatible DC while saving the old bitmap for restoration
+	hbmOld = (HBITMAP) ::SelectObject(hDCCompatible, hbmScreen);
+	//hiding this application window and taking the screenshot
+	::ShowWindow(AfxGetMainWnd()->m_hWnd, SW_HIDE);
+//	::SendMessageA(AfxGetMainWnd()->m_hWnd, SC_MINIMIZE, 0, 0);
+	if(!::IsWindowVisible(AfxGetMainWnd()->m_hWnd))
+		::BitBlt(hDCCompatible, 0, 0, cx, cy, hDCScreen, 0, 0, SRCCOPY);
+	else
+		OutputDebugStringA("Window still visible");
+	//::Sleep(500);
+	//::ShowWindow(AfxGetMainWnd()->m_hWnd, SW_SHOW);
+	//::SendMessageA(AfxGetMainWnd()->m_hWnd, SC_RESTORE, 0, 0);
+	//UpdateWindow();
+	//now transfering the image to the client area of the view
+	GetClientRect(&rec);
+	hDCClient = ::GetDC(AfxGetMainWnd()->m_hWnd);
+//	hDCCompatibleClient = ::CreateCompatibleDC(hDCClient);
+	hbmClient = ::CreateCompatibleBitmap(hDCClient, rec.right, rec.bottom);
+	::SelectObject(hDCClient, hbmClient);
+	::ShowWindow(AfxGetMainWnd()->m_hWnd, SW_SHOW);
+	UpdateWindow();
+	//if(::IsWindowVisible(AfxGetMainWnd()->m_hWnd))
+	//	::StretchBlt(hDCClient, 0, 0, rec.right , rec.bottom, hDCCompatible, 0, 0, cx, cy, SRCCOPY);
+	{
+		memset(&bminfo, 0, sizeof(BITMAPINFO));
+		bminfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+		::SelectObject(hDCCompatible, hbmOld);
+		memset(&bm, 0, sizeof(BITMAP));
+		::GetObject(hbmScreen, sizeof(BITMAP), &bm);
+		bminfo.bmiHeader.biHeight = bm.bmHeight;
+		bminfo.bmiHeader.biWidth = bm.bmWidth;
+		bminfo.bmiHeader.biPlanes = bm.bmPlanes;
+		bminfo.bmiHeader.biSizeImage = (bm.bmPlanes * bm.bmWidth * bm.bmHeight * bm.bmBitsPixel)/8;  //total no if bytes of bitmap data
+		bminfo.bmiHeader.biBitCount = bm.bmBitsPixel;
+		if( (bm.bmBitsPixel == 16) || (bm.bmBitsPixel == 32) )
+			bminfo.bmiHeader.biCompression = BI_BITFIELDS;
+		else 
+			bminfo.bmiHeader.biCompression = BI_RGB;
+
+		::SetLastError(0);
+//		int scanLine = ::GetDIBits(hDCCompatible, hbmScreen, 0, cy, NULL, &bminfo, DIB_RGB_COLORS);
+		dwErr = ::GetLastError();
+		//now allocating the buffer for the bitmap data
+		
+		pByte = (PBYTE)::GlobalAlloc(GMEM_FIXED, bminfo.bmiHeader.biSizeImage);
+		//memset(pByte, 0, bminfo.bmiHeader.biSizeImage);
+		//now we have the bitmap bits so using it
+		::SetLastError(0);
+
+		::GetDIBits(hDCCompatible, hbmScreen, 0, cy, pByte, &bminfo, DIB_RGB_COLORS);
+		dwErr = ::GetLastError();
+		::SelectObject(hDCCompatible, hbmScreen);
+		::SetLastError(0);
+		::StretchDIBits(hDCClient, rec.left, rec.top+30, rec.right, rec.bottom, 0, 0, cx, cy, (LPVOID)pByte, &bminfo, DIB_RGB_COLORS, SRCCOPY);
+		dwErr = ::GetLastError();
+		
+	}
+//		WriteDDBToFile(hDCCompatible, hbmScreen, "sample_01.bmp");
+//		::StretchDIBits(hDCClient, 0, 0, rec.right, rec.bottom, 0, 0, cx, cy, 
+	
+	//cleanup
+	::SelectObject(hDCCompatible, hbmOld);
+	::DeleteObject(hbmScreen);
+	::ReleaseDC(AfxGetMainWnd()->m_hWnd, hDCClient);
+	::ReleaseDC(NULL, hDCCompatible);
+	::ReleaseDC(NULL, hDCScreen);
+	::GlobalFree(pByte);
+
+			{
+			char xxx[128];
+			sprintf_s(xxx, 128*sizeof(BYTE), "visible = %d, width = %d, height = %d", ::IsWindowVisible(hWnd), rec.right, rec.bottom);
+			OutputDebugStringA(xxx);
+		}
+
+
+	{
+		char xxx[256];
+		sprintf_s(xxx, sizeof(char)*128, "CopyDDBToDIB calling PALETTE SUPPORT : %d BITSPIXEL: %d SIZEPALETTE: %d COLORRES: %d NUMCOLORS: %d PLANES: %d", (::GetDeviceCaps(hDC, RASTERCAPS) & RC_PALETTE),
+			::GetDeviceCaps(hDC, BITSPIXEL), ::GetDeviceCaps(hDC, SIZEPALETTE), ::GetDeviceCaps(hDC, COLORRES), ::GetDeviceCaps(hDC, NUMCOLORS), ::GetDeviceCaps(hDC, PLANES));
+		OutputDebugStringA(xxx);
+	}
+	
+
+	//////////// WHAT ARE THESE FUNCTIONS USED FOR
+
+		DRAWPATRECT drPR;
+		UINT ul;
+		ul = DRAWPATTERNRECT;
+		drPR.ptPosition.x = drPR.ptPosition.y = 50;
+		drPR.ptSize.x = drPR.ptSize.y = 100;
+		drPR.wStyle = 0;
+		drPR.wPattern = 60;
+		//if(::ExtEscape(hdc, QUERYESCSUPPORT, sizeof(ul), (LPCSTR)&ul, 0, 0) > 0)
+			::ExtEscape(hdc, DRAWPATTERNRECT, sizeof(DRAWPATRECT), (LPCSTR)&drPR, 0, NULL);
+
+
+			//////////////////////////////////////////////////////////////////////////
